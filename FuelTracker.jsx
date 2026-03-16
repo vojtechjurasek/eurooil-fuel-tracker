@@ -1,6 +1,26 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
 const BASE = "https://srdcovka.eurooil.cz/api/verejne";
+
+const CORS_PROXIES = [
+  (url) => url, // direct first
+  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+];
+
+async function fetchWithCorsRetry(url) {
+  let lastError;
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const res = await fetch(proxy(url));
+      if (res.ok) return res;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError || new Error("Všechny pokusy o načtení selhaly (CORS).");
+}
+
 const getToken = () => {
   const now = new Date();
   const pad = (n, len = 2) => String(n).padStart(len, "0");
@@ -410,24 +430,24 @@ export default function FuelTracker() {
     try {
       const token = getToken();
       const [stRes, prRes] = await Promise.allSettled([
-        fetch(`${BASE}/cerpaci-stanice?token=${token}`),
-        fetch(`${BASE}/ceniky?token=${token}`),
+        fetchWithCorsRetry(`${BASE}/cerpaci-stanice?token=${token}`),
+        fetchWithCorsRetry(`${BASE}/ceniky?token=${token}`),
       ]);
 
       let stData = null;
       let prData = null;
 
-      if (stRes.status === "fulfilled" && stRes.value.ok) {
+      if (stRes.status === "fulfilled") {
         stData = await stRes.value.json();
         setRawStations(stData);
       }
-      if (prRes.status === "fulfilled" && prRes.value.ok) {
+      if (prRes.status === "fulfilled") {
         prData = await prRes.value.json();
         setRawPrices(prData);
       }
 
       if (!stData && !prData) {
-        throw new Error("Nepodařilo se načíst data z API. Token mohl vypršet – zkuste stránku obnovit.");
+        throw new Error("Nepodařilo se načíst data z API. Možný CORS problém nebo vypršelý token – zkuste stránku obnovit.");
       }
 
       let parsed = extractStations(stData);
